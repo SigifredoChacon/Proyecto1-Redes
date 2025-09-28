@@ -1,0 +1,60 @@
+# --- Entorno/venv locales
+.venv/
+venv/
+env/
+ENV/
+
+# --- Python compilados y cachés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Paquetes / build / metadata
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Herramientas de test y cobertura
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# --- Linters / type checkers / formatters
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+.dmypy.json
+
+# --- Notebooks
+.ipynb_checkpoints/
+
+# --- Archivos de configuración/locales (variables de entorno)
+.env
+.env.*
+*.env
+
+# --- Logs y dumps
+*.log
+*.sqlite3
+*.db
+*.pid
+
+# --- IDEs y editores (PyCharm/JetBrains fuera del repo)
+.idea/
+
+# VS Code (por si acaso)
+.vscode/
+
+# --- SO (macOS/Windows/Linux)
+.DS_Store
+Thumbs.db
+.desktop
+
+# --- Otros frecuentes
+.cache/
+.svn/
