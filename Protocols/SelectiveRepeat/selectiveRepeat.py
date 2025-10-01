@@ -1,4 +1,3 @@
-
 from Utils.types import Frame, FrameKind, EventType, Packet
 from Utils.util import inc, between
 from Events.api import (
@@ -7,16 +6,16 @@ from Events.api import (
     enable_network_layer, disable_network_layer
 )
 
-
 OFFSET_A = 0
 OFFSET_B = 100
 
 class SRPeerUni:
     """
-    Un extremo Selective Repeat (estado TX/RX).
-    - TX: ventana SR con timers por trama (start/stop_timer con offset por peer)
-    - RX: ventana SR con arrived[]/in_buf[] y entrega en orden
-    - Piggyback: cada DATA sale con ack = (frame_expected - 1) mod (max_seq+1)
+    Un extremo Selective Repeat (estado TX/RX) con:
+      - Ventana SR, timers por trama (offset A/B),
+      - RX con arrived[]/in_buf[] y entrega en orden,
+      - ACK SELECTIVO (ack_pending_seq) + piggyback oportunista,
+      - De-dupe por epoch: evita doble envío de la misma seq en el mismo tick.
     """
     def __init__(self, label: str, max_seq: int = 7):
         assert label in ("A", "B")
@@ -26,13 +25,19 @@ class SRPeerUni:
 
         # ----- Estado TX -----
         self.next_to_send = 0
-        self.out_buf = {}
+        self.out_buf = {}  # seq -> Packet
 
         # ----- Estado RX -----
         self.frame_expected = 0
         self.too_far = self.nr_bufs
         self.arrived = [False] * self.nr_bufs
         self.in_buf = [None] * self.nr_bufs
+
+        # ACK selectivo pendiente para piggyback o ACK puro
+        self.ack_pending_seq = None
+
+        # De-dupe por epoch: recordatorio del último epoch en que se envió cada seq
+        self._last_sent_epoch = {}  # seq -> epoch
 
     # -------- TX helpers --------
     def tx_window_has_space(self) -> bool:
@@ -45,29 +50,41 @@ class SRPeerUni:
         """Último en orden ya entregado = frame_expected - 1 (mod max_seq+1)."""
         return (self.frame_expected + self.max_seq) % (self.max_seq + 1)
 
-    def tx_send_data(self):
+    def _should_skip_send_this_epoch(self, seq: int, epoch: int) -> bool:
+        """Evita doble envío de la misma seq dentro del mismo tick/epoch."""
+        return self._last_sent_epoch.get(seq) == epoch
+
+    def _mark_sent_epoch(self, seq: int, epoch: int):
+        self._last_sent_epoch[seq] = epoch
+
+    def tx_send_data(self, epoch: int):
         """
-        Saca un Packet de la app, lo etiqueta 'A>'/'B>', arma una DATA:
+        Saca Packet, etiqueta 'A>'/'B>', arma DATA:
           - seq = next_to_send
-          - ack = last_in_order()   (PIGGYBACK)
-        Inicia DATA timer (offset+seq) y avanza next_to_send.
+          - ack = ack_pending_seq (selectivo) o last_in_order() (acumulativo)
+        Inicia timer (offset+seq) y avanza next_to_send.
+        De-dupe: no repite la misma seq en el mismo epoch.
         """
+        s = self.next_to_send
+        if self._should_skip_send_this_epoch(s, epoch):
+            return  # de-dupe
+
         p = from_network_layer()
         p_labeled = Packet(f"{self.label}>{p.data}")
 
-        s = self.next_to_send
         self.out_buf[s] = p_labeled
-
-        ack_pb = self.last_in_order()
+        ack_pb = self.ack_pending_seq if self.ack_pending_seq is not None else self.last_in_order()
         to_physical_layer(Frame(FrameKind.DATA, s, ack_pb, p_labeled))
-
+        self._mark_sent_epoch(s, epoch)
 
         start_timer(self.tx_offset() + s)
-
         self.next_to_send = inc(s, self.max_seq)
 
+        # opcional: ya piggybackeado → limpia para no re-ACKear igual
+        self.ack_pending_seq = None
+
     def tx_ack_one(self, a: int):
-        """Procesa (piggyback) ACK selectivo 'a' si sigue pendiente."""
+        """Procesa ACK selectivo 'a' si aún está pendiente."""
         if a in self.out_buf:
             try:
                 stop_timer(self.tx_offset() + a)
@@ -75,12 +92,14 @@ class SRPeerUni:
                 pass
             self.out_buf.pop(a, None)
 
-    def tx_retransmit_one(self, seq: int):
-        """Retransmite solo esa seq si aún está pendiente (SR)."""
+    def tx_retransmit_one(self, seq: int, epoch: int):
+        """Retransmite solo 'seq' si aún está pendiente. De-dupe por epoch."""
         if seq in self.out_buf:
-
-            ack_pb = self.last_in_order()
+            if self._should_skip_send_this_epoch(seq, epoch):
+                return  # de-dupe (evita doblete inmediato)
+            ack_pb = self.ack_pending_seq if self.ack_pending_seq is not None else self.last_in_order()
             to_physical_layer(Frame(FrameKind.DATA, seq, ack_pb, self.out_buf[seq]))
+            self._mark_sent_epoch(seq, epoch)
             start_timer(self.tx_offset() + seq)
 
     # -------- RX helpers --------
@@ -100,19 +119,16 @@ class SRPeerUni:
                 self.too_far = inc(self.too_far, self.max_seq)
 
 # =====================================================================
-#                       DISPATCHER BIDIRECCIONAL (con PB)
+#                       DISPATCHER BIDIRECCIONAL (con PB selectivo)
 # =====================================================================
 
 def run_sr_bidirectional(steps=1000, max_seq=7):
     """
-    Bucle central:
-      - Alterna NETWORK_LAYER_READY entre A/B si hay espacio (produce DATA con piggyback).
-      - FRAME_ARRIVAL:
-          * DATA "A>..." la procesa B (RX), B consume piggyback r.ack, difiere ACK (ack_timer).
-          * DATA "B>..." la procesa A, A consume piggyback r.ack, difiere ACK.
-          * ACK puro: enruta a emisor opuesto (como antes).
-      - TIMEOUT (DATA): usa offsets para A/B y retransmite solo esa seq (SR).
-      - ACK_TIMEOUT: envía ACK puro del último en orden del peer dueño del ACK diferido.
+    SR bidireccional con:
+      - ACK selectivo (ack_pending_seq),
+      - Piggyback oportunista,
+      - De-dupe por epoch para evitar dobletes inmediatos,
+      - Retransmisión selectiva por TIMEOUT (si sigue pendiente).
     """
     A = SRPeerUni("A", max_seq=max_seq)
     B = SRPeerUni("B", max_seq=max_seq)
@@ -122,6 +138,7 @@ def run_sr_bidirectional(steps=1000, max_seq=7):
     turn = 0
     processed = 0
     ack_owner = None
+    epoch = 0  # ← contador de 'ticks' del bucle
 
     while processed < steps:
         ev, payload = wait_for_event()
@@ -130,27 +147,26 @@ def run_sr_bidirectional(steps=1000, max_seq=7):
             served = False
             if turn % 2 == 0:
                 if A.tx_window_has_space():
-                    A.tx_send_data(); served = True
-
+                    A.tx_send_data(epoch); served = True
                     if ack_owner == "A":
                         try: stop_ack_timer()
                         except Exception: pass
                         ack_owner = None
                 elif B.tx_window_has_space():
-                    B.tx_send_data(); served = True
+                    B.tx_send_data(epoch); served = True
                     if ack_owner == "B":
                         try: stop_ack_timer()
                         except Exception: pass
                         ack_owner = None
             else:
                 if B.tx_window_has_space():
-                    B.tx_send_data(); served = True
+                    B.tx_send_data(epoch); served = True
                     if ack_owner == "B":
                         try: stop_ack_timer()
                         except Exception: pass
                         ack_owner = None
                 elif A.tx_window_has_space():
-                    A.tx_send_data(); served = True
+                    A.tx_send_data(epoch); served = True
                     if ack_owner == "A":
                         try: stop_ack_timer()
                         except Exception: pass
@@ -165,79 +181,95 @@ def run_sr_bidirectional(steps=1000, max_seq=7):
         elif ev == EventType.FRAME_ARRIVAL:
             r = from_physical_layer(payload)
             if not r:
-                processed += 1
+                processed += 1; epoch += 1
                 continue
 
             if r.kind == FrameKind.DATA:
                 data = r.info.data
                 if data.startswith("A>"):
-
+                    # RX en B (A->B)
                     B.rx_accept_and_deliver(r.seq, Packet(data[2:]))
 
-
+                    # Consumir ACK piggyback que llegó (confirma B->A)
                     B.tx_ack_one(r.ack)
 
+                    # Registrar ACK selectivo pendiente (para A)
+                    B.ack_pending_seq = r.seq
 
-                    try: stop_ack_timer()
-                    except Exception: pass
-                    start_ack_timer()
-                    ack_owner = "B"
+                    # Piggyback oportunista: enviar YA si hay ventana
+                    if B.tx_window_has_space():
+                        try: stop_ack_timer()
+                        except Exception: pass
+                        ack_owner = None
+                        B.tx_send_data(epoch)  # llevará ack = ack_pending_seq
+                    else:
+                        try: stop_ack_timer()
+                        except Exception: pass
+                        start_ack_timer()
+                        ack_owner = "B"
 
                     enable_network_layer()
 
                 elif data.startswith("B>"):
-
+                    # RX en A (B->A)
                     A.rx_accept_and_deliver(r.seq, Packet(data[2:]))
 
-
+                    # Consumir ACK piggyback que llegó (confirma A->B)
                     A.tx_ack_one(r.ack)
 
+                    # Registrar ACK selectivo pendiente (para B)
+                    A.ack_pending_seq = r.seq
 
-                    try: stop_ack_timer()
-                    except Exception: pass
-                    start_ack_timer()
-                    ack_owner = "A"
+                    if A.tx_window_has_space():
+                        try: stop_ack_timer()
+                        except Exception: pass
+                        ack_owner = None
+                        A.tx_send_data(epoch)
+                    else:
+                        try: stop_ack_timer()
+                        except Exception: pass
+                        start_ack_timer()
+                        ack_owner = "A"
 
                     enable_network_layer()
 
                 else:
-
                     pass
 
             elif r.kind == FrameKind.ACK:
-
                 tag = r.info.data
                 if tag == "ACK:A":
-
                     B.tx_ack_one(r.ack)
                     enable_network_layer()
                 elif tag == "ACK:B":
-
                     A.tx_ack_one(r.ack)
                     enable_network_layer()
                 else:
                     pass
 
         elif ev == EventType.ACK_TIMEOUT:
-
+            # ACK puro: enviar selectivo si hay; si no, acumulativo
             if ack_owner == "A":
-                ack_seq = A.last_in_order()
+                ack_seq = A.ack_pending_seq if A.ack_pending_seq is not None else A.last_in_order()
                 to_physical_layer(Frame(FrameKind.ACK, 0, ack_seq, Packet("ACK:A")))
+                A.ack_pending_seq = None
                 ack_owner = None
             elif ack_owner == "B":
-                ack_seq = B.last_in_order()
+                ack_seq = B.ack_pending_seq if B.ack_pending_seq is not None else B.last_in_order()
                 to_physical_layer(Frame(FrameKind.ACK, 0, ack_seq, Packet("ACK:B")))
+                B.ack_pending_seq = None
                 ack_owner = None
 
             enable_network_layer()
 
         elif ev == EventType.TIMEOUT:
-
-            key = payload
+            # Retransmisión selectiva (si sigue pendiente)
+            key = payload  # en tu Engine es 'seq' con offset
             if key >= OFFSET_B:
-                B.tx_retransmit_one(key - OFFSET_B)
+                B.tx_retransmit_one(key - OFFSET_B, epoch)
             else:
-                A.tx_retransmit_one(key - OFFSET_A)
+                A.tx_retransmit_one(key - OFFSET_A, epoch)
             enable_network_layer()
 
         processed += 1
+        epoch += 1
