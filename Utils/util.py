@@ -5,8 +5,10 @@ def inc(k, max_seq):
     else:
         return k + 1
 
-def between(a, b, c):
-    if (((a <= b) and (b < c)) or ((c < a) and (a <= b)) or ((b < c) and (c < a))):
-        return True
+def between(a: int, b: int, c: int) -> bool:
+
+    if a <= c:
+        return a <= b < c
     else:
-        return False
+        # ventana envuelve: [a..M-1] U [0..c-1]
+        return b >= a or b < c

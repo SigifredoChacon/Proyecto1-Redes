@@ -20,7 +20,10 @@ class Engine:
         self.logs_transmit = []
         self.logs_receive = []
         self.logs_events = []
-
+        # === NUEVO: política de READY al habilitar la red (ACK-wake) ===
+        # Si tu SimConfig ya trae estos campos, se usan; si no, se aplican por defecto.
+        self.ready_on_enable: bool = getattr(self.cfg, "ready_on_enable", True)
+        self.ready_delay: float = getattr(self.cfg, "ready_delay", 0.0)
 
     def schedule(self, dt: float, ev: EventType, payload: Any=None):
         time = self.now + max(0.0, dt)
@@ -28,14 +31,37 @@ class Engine:
         heapq.heappush(self.queue, item)
         return item
 
-
     def wait_for_event(self):
+        # Si cola vacía y red habilitada, inyecta un READY inmediato
         if not self.queue and self.net_enabled:
             self.schedule(0.0, EventType.NETWORK_LAYER_READY, None)
-        time, _, ev, payload = heapq.heappop(self.queue)
-        self.now = time
-        self.logs_events.append((self.now, ev.name))
-        return ev, payload
+
+        # CHANGED: bucle para descartar eventos "stale" (timers fantasma)
+        while True:
+            time, eid, ev, payload = heapq.heappop(self.queue)  # CHANGED (capturo eid)
+            self.now = time
+
+            # Filtrado de TIMEOUT de DATA: validar contra self.timers[seq]
+            if ev == EventType.TIMEOUT:
+                seq = payload
+                valid = self.timers.get(seq)
+                if valid is None or valid != (time, eid):
+                    # Es un timeout viejo (timer cancelado/reprogramado) -> descartar
+                    continue
+                # Es válido: consume el registro para que no se reprograme solo
+                self.timers.pop(seq, None)
+
+            # Filtrado de ACK_TIMEOUT: validar contra self.ack_timer
+            elif ev == EventType.ACK_TIMEOUT:
+                if self.ack_timer is None or self.ack_timer != (time, eid):
+                    # ACK timeout viejo -> descartar
+                    continue
+                # Es válido: limpia para evitar repetición
+                self.ack_timer = None
+
+            # Registrar el evento aceptado y devolverlo
+            self.logs_events.append((self.now, ev.name))
+            return ev, payload
 
     def from_network_layer(self):
         p = Packet(f"MSG_{self.msg_i}")
@@ -74,6 +100,9 @@ class Engine:
 
     def enable_network_layer(self):
         self.net_enabled = True
+        # === NUEVO: al habilitar red, programa un READY pronto (ACK-wake) ===
+        if self.ready_on_enable:
+            self.schedule(self.ready_delay, EventType.NETWORK_LAYER_READY, None)
 
     def disable_network_layer(self):
         self.net_enabled = False

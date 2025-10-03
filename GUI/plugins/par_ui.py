@@ -11,10 +11,8 @@ except Exception:
     # Si tu Events.api expone estas funciones con otros nombres, ajústalo aquí
     from Events.api import wait_for_event, from_physical_layer
 
-try:
-    from Protocols.PAR.par import ParSender, ParReceiver
-except Exception:
-    from par import ParSender, ParReceiver
+from Protocols.PAR.par import ParSender, ParReceiver
+
 
 
 class PARUI(ProtocolPlugin):

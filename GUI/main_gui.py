@@ -113,9 +113,10 @@ class MainGUI(ttk.Frame):
             "Utopia": 10,
             "Stop-and-Wait": 10,
             "PAR": 10,
-            "Sliding Window 1-bit": 100,
-            "Go-Back-N": 100,
-            "Selective Repeat": 100,
+            # Requisito: mínimo 2000 para estos
+            "Sliding Window 1-bit": 2000,
+            "Go-Back-N": 2000,
+            "Selective Repeat": 2000,
         }
         self._target_steps = 0
 
@@ -225,7 +226,7 @@ class MainGUI(ttk.Frame):
         self._kv(sg, 1, "RX entregados", self.rx_total_var); self._kv(sg, 1, "Eficiencia", self.eff_var, col=1)
         self._kv(sg, 2, "Goodput", self.gp_var)
 
-        # Canvas (computadoras: use_nests=False)
+        # Canvas (computadoras)
         canvas_card = ttk.Labelframe(right, text="Topología / Tramas", style="Card.TLabelframe")
         canvas_card.pack(fill="x", pady=(8,6))
         self.anim = AnimationCanvas(canvas_card, height=260, use_nests=False)

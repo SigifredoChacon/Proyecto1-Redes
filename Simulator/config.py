@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass
 
 @dataclass
@@ -11,3 +10,5 @@ class SimConfig:
     data_timeout: float = 0.5     # temporizador por trama en PAR/GBN/SR
     max_seq: int = 7              # 1, 3, 7, 15... (2^n - 1)
     nr_bufs: int = (7 + 1)//2     # buffers de SR: (max_seq+1)/2 (recalcula si cambias max_seq)
+    ready_on_enable: bool = False  # o True, si quieres que venga activo por defecto
+    ready_delay: float = 0.005
