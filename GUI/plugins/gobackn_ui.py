@@ -51,10 +51,18 @@ class GoBackNUI(ProtocolPlugin):
             messagebox.showerror(self.name, str(e))
             return 0
 
+    @staticmethod
+    def _dir_from_info(kind: str, info: str | None, default: str = "LR") -> str:
+        k = (kind or "").upper()
+        s = (info or "").upper()
+        if k == "DATA":
+            if s.startswith("A>"): return "LR"  # A→B
+            if s.startswith("B>"): return "RL"  # B→A
+        if k == "ACK":
+            if "ACK:A" in s: return "LR"  # A→B
+            if "ACK:B" in s: return "RL"  # B→A
+        return default
+
     def direction_for(self, kind: str, seq: int, ack, info=None) -> str:
-        if kind == "DATA":
-            direction = "LR" if getattr(self, "_next_sender", "A") == "A" else "RL"
-            self._last_data_dir = direction
-            self._next_sender = "B" if getattr(self, "_next_sender", "A") == "A" else "A"
-            return direction
-        return "RL" if getattr(self, "_last_data_dir", "LR") == "LR" else "LR"
+        # Deducción robusta desde el 'info'
+        return self._dir_from_info(kind, info, default="LR")

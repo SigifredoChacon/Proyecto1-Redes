@@ -54,11 +54,17 @@ class SelectiveRepeatUI(ProtocolPlugin):
             messagebox.showerror(self.name, str(e))
             return 0
 
+    @staticmethod
+    def _dir_from_info(kind: str, info: str | None, default: str = "LR") -> str:
+        k = (kind or "").upper()
+        s = (info or "").upper()
+        if k == "DATA":
+            if s.startswith("A>"): return "LR"
+            if s.startswith("B>"): return "RL"
+        if k == "ACK":
+            if "ACK:A" in s: return "LR"
+            if "ACK:B" in s: return "RL"
+        return default
+
     def direction_for(self, kind: str, seq: int, ack, info=None) -> str:
-        # DATA alterna A->B y B->A; ACK en sentido opuesto al último DATA
-        if kind == "DATA":
-            direction = "LR" if getattr(self, "_next_sender", "A") == "A" else "RL"
-            self._last_data_dir = direction
-            self._next_sender = "B" if getattr(self, "_next_sender", "A") == "A" else "A"
-            return direction
-        return "RL" if getattr(self, "_last_data_dir", "LR") == "LR" else "LR"
+        return self._dir_from_info(kind, info, default="LR")

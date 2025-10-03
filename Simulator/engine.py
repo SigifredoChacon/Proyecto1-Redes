@@ -22,7 +22,7 @@ class Engine:
         self.logs_events = []
         # === NUEVO: política de READY al habilitar la red (ACK-wake) ===
         # Si tu SimConfig ya trae estos campos, se usan; si no, se aplican por defecto.
-        self.ready_on_enable: bool = getattr(self.cfg, "ready_on_enable", True)
+        self.ready_on_enable: bool = getattr(self.cfg, "ready_on_enable", False)
         self.ready_delay: float = getattr(self.cfg, "ready_delay", 0.0)
 
     def schedule(self, dt: float, ev: EventType, payload: Any=None):

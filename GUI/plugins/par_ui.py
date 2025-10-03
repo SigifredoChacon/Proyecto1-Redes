@@ -1,15 +1,17 @@
+# GUI/plugins/par_ui.py
 from __future__ import annotations
 from tkinter import ttk, messagebox
 from Simulator.config import SimConfig
 from GUI.protocol_base import ProtocolPlugin
 from Utils.types import EventType, FrameKind
 
-# Dependencias del protocolo PAR (ajusto rutas posibles)
+# Dependencias del protocolo PAR (rutas contempladas)
 try:
     from Events.api import wait_for_event, from_physical_layer
+    from Events.api import enable_network_layer, disable_network_layer
 except Exception:
-    # Si tu Events.api expone estas funciones con otros nombres, ajústalo aquí
     from Events.api import wait_for_event, from_physical_layer
+    from Events.api import enable_network_layer, disable_network_layer
 
 from Protocols.PAR.par import ParSender, ParReceiver
 
@@ -32,9 +34,8 @@ class PARUI(ProtocolPlugin):
         self.R = ParReceiver()
         self.anim.clear_packets()
 
-    # --- compat con base (algunos proyectos piden tick) ---
+    # Compatibilidad con base (algunos proyectos piden tick)
     def tick(self, k: int) -> int:
-        """Compatibilidad con ProtocolPlugin abstracto."""
         total = 0
         for _ in range(max(1, int(k))):
             total += self.auto_step()
@@ -43,31 +44,40 @@ class PARUI(ProtocolPlugin):
     def auto_step(self) -> int:
         """
         Procesa varios eventos del Engine (similar a run_par.py).
-        Retorna cuántos eventos avanzó, para que el main pueda contabilizar.
+        Retorna cuántos sub-pasos avanzó, tolerando cola vacía.
         """
         N = 200  # tamaño de bloque razonable
         processed = 0
+
+        # Si el emisor no está esperando, la network layer estará habilitada;
+        # en caso contrario, es normal que la cola quede vacía por momentos.
         try:
             while processed < N:
-                ev, payload = wait_for_event()
+                try:
+                    ev, payload = wait_for_event()
+                except IndexError:
+                    # cola vacía: no hay eventos listos ahora mismo
+                    break
 
                 if ev == EventType.FRAME_ARRIVAL:
                     f = from_physical_layer(payload)
-                    if f.kind == FrameKind.DATA:
-                        self.R.on_event(ev, f)   # receptor procesa DATA
-                    elif f.kind == FrameKind.ACK:
-                        self.S.on_event(ev, f)   # emisor procesa ACK
+                    if f:
+                        if f.kind == FrameKind.DATA:
+                            self.R.on_event(ev, f)   # receptor procesa DATA
+                        elif f.kind == FrameKind.ACK:
+                            self.S.on_event(ev, f)   # emisor procesa ACK
 
                 elif ev in (EventType.NETWORK_LAYER_READY, EventType.TIMEOUT):
                     self.S.on_event(ev, payload)
 
                 processed += 1
+
             return processed
 
         except Exception as e:
             messagebox.showerror(self.name, str(e))
-            return 0
+            return processed
 
     def direction_for(self, kind: str, seq, ack, info=None) -> str:
         # En PAR, DATA va LR (A→B) y ACK puro regresa RL (B→A)
-        return "LR" if kind == "DATA" else "RL"
+        return "LR" if str(kind).upper() == "DATA" else "RL"

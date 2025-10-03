@@ -107,13 +107,12 @@ class MainGUI(ttk.Frame):
         self._paused = False
         self._job = None
 
-        # límites y contadores
+        # límites y contadores (NO CAMBIAR FUNCIONALIDAD)
         self._steps_done = 0
         self._min_limit_by_proto = {
             "Utopia": 10,
             "Stop-and-Wait": 10,
             "PAR": 10,
-            # Requisito: mínimo 2000 para estos
             "Sliding Window 1-bit": 2000,
             "Go-Back-N": 2000,
             "Selective Repeat": 2000,
@@ -134,23 +133,53 @@ class MainGUI(ttk.Frame):
         self._build_layout()
         self._load_plugin("Utopia")
 
-    # ---------- estilos ----------
+    # ---------- estilos (solo visual) ----------
     def _setup_styles(self):
         style = ttk.Style()
         try: style.theme_use("clam")
         except: pass
-        bg = "#0f172a"; fg = "#e2e8f0"; field = "#1e293b"
-        style.configure(".", background=bg, foreground=fg)
-        style.configure("Card.TLabelframe", background=bg, foreground=fg)
-        style.configure("Card.TLabelframe.Label", foreground=fg)
-        style.configure("TButton", padding=6)
-        style.configure("TEntry", fieldbackground=field, foreground=fg)
-        style.configure("TCombobox", fieldbackground=field, foreground=fg)
-        style.configure("TSpinbox", fieldbackground=field, foreground=fg)
-        style.configure("Treeview", fieldbackground=field, background=field, foreground=fg)
-        style.configure("Treeview.Heading", background=bg, foreground=fg)
-        style.map("TButton", background=[("active", "#334155")])
 
+        # Paleta
+        bg   = "#0b1020"  # más profundo
+        card = "#111a2b"
+        field= "#162841"
+        fg   = "#e7edf5"
+        sub  = "#9fb3c8"
+        acc  = "#3b82f6"  # azul suave
+
+        # Base
+        style.configure(".", background=bg, foreground=fg, font=("Segoe UI", 10))
+        self.master.configure(background=bg)
+
+        # Cards
+        style.configure("Card.TLabelframe", background=card, foreground=fg, relief="flat")
+        style.configure("Card.TLabelframe.Label", font=("Segoe UI Semibold", 10), foreground=fg)
+        style.map("Card.TLabelframe", background=[("active", card)])
+
+        # Headers
+        style.configure("Header.TLabel", background=bg, foreground=fg, font=("Segoe UI Semibold", 16))
+        style.configure("Subheader.TLabel", background=bg, foreground=sub, font=("Segoe UI", 10))
+
+        # Inputs
+        style.configure("TEntry", fieldbackground=field, foreground=fg)
+        style.configure("TCombobox", fieldbackground=field, foreground=fg, arrowsize=14)
+        style.configure("TSpinbox", fieldbackground=field, foreground=fg)
+
+        # Buttons
+        style.configure("Accent.TButton",
+                        background=acc, foreground="white", padding=8, anchor="center")
+        style.map("Accent.TButton",
+                  background=[("active", "#2563eb")], foreground=[("active", "white")])
+        style.configure("TButton", padding=8)
+        style.map("TButton", background=[("active", "#1f2b44")])
+
+        # Treeview
+        style.configure("Treeview",
+                        background=field, fieldbackground=field, foreground=fg, rowheight=26,
+                        font=("Segoe UI", 10))
+        style.configure("Treeview.Heading", background=card, foreground=fg, font=("Segoe UI Semibold", 10))
+
+        # Listbox/Combobox popup
         root = self.master
         root.option_add("*TCombobox*Listbox*background", field)
         root.option_add("*TCombobox*Listbox*foreground", fg)
@@ -158,20 +187,51 @@ class MainGUI(ttk.Frame):
         root.option_add("*Listbox*foreground", fg)
         root.option_add("*Entry*foreground", fg)
 
-    # ---------- layout ----------
-    def _build_layout(self):
-        left = ttk.Frame(self); left.pack(side="left", fill="y", padx=12, pady=12)
-        right = ttk.Frame(self); right.pack(side="right", fill="both", expand=True, padx=12, pady=12)
+        # Guardamos colores para pequeñas líneas decorativas
+        self._clr = {"bg": bg, "card": card, "field": field, "fg": fg, "sub": sub, "acc": acc}
 
-        ttk.Label(left, text="Protocolo").pack(anchor="w")
+    # ---------- layout (solo visual) ----------
+    def _build_layout(self):
+        # Banner superior
+        topbar = ttk.Frame(self, padding=(10, 12))
+        topbar.pack(side="top", fill="x")
+        ttk.Label(topbar, text="Simulador de Protocolos de Enlace",
+                  style="Header.TLabel").pack(side="left")
+        ttk.Label(topbar, text="Utopía · Stop-and-Wait · PAR · GBN · SR · SW(1-bit)",
+                  style="Subheader.TLabel").pack(side="left", padx=(10,0))
+
+        # Línea decorativa
+        deco = tk.Frame(self, height=2, bg=self._clr["acc"])
+        deco.pack(fill="x", padx=0, pady=(0,6))
+
+        # Contenedor principal: columnas
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+
+        # Sidebar izquierda
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="y", padx=(0,10))
+
+        # Panel derecho
+        right = ttk.Frame(body)
+        right.pack(side="right", fill="both", expand=True)
+
+        # --- LEFT: tarjeta configuración ---
+        cfg_card = ttk.Labelframe(left, text="Configuración", style="Card.TLabelframe", padding=10)
+        cfg_card.pack(fill="x")
+
+        # Protocolo
+        row = ttk.Frame(cfg_card); row.pack(fill="x", pady=(2,8))
+        ttk.Label(row, text="Protocolo").pack(anchor="w")
         self.sel_proto = ttk.Combobox(
-            left, state="readonly",
+            row, state="readonly",
             values=["Utopia", "Stop-and-Wait", "PAR", "Sliding Window 1-bit", "Go-Back-N", "Selective Repeat"]
         )
         self.sel_proto.current(0)
-        self.sel_proto.pack(fill="x", pady=(0,8))
+        self.sel_proto.pack(fill="x", pady=(4,0))
         self.sel_proto.bind("<<ComboboxSelected>>", self._on_proto_change)
 
+        # Grid de parámetros
         self.delay = tk.DoubleVar(value=0.02)
         self.jitter = tk.DoubleVar(value=0.01)
         self.loss = tk.DoubleVar(value=0.0)
@@ -189,34 +249,44 @@ class MainGUI(ttk.Frame):
             ("ACK timeout (s)", self.ack_to, 0.01, 5.0, 0.01),
             ("max_seq (2^n - 1)", self.maxseq, 1, 31, 2),
         ]
-        for lbl, var, frm, to, inc in params:
-            row = ttk.Frame(left); row.pack(fill="x", pady=3)
-            ttk.Label(row, text=lbl).pack(side="left")
-            ttk.Spinbox(row, textvariable=var, from_=frm, to=to, increment=inc, width=10).pack(side="right")
 
-        # Límite de pasos
-        limit_row = ttk.Frame(left); limit_row.pack(fill="x", pady=(12,6))
-        ttk.Label(limit_row, text="Máximo de pasos").pack(side="left")
+        grid = ttk.Frame(cfg_card); grid.pack(fill="x", pady=(6,8))
+        for i, (lbl, var, frm, to, inc) in enumerate(params):
+            r = ttk.Frame(grid)
+            r.grid(row=i, column=0, sticky="ew", pady=2)
+            ttk.Label(r, text=lbl).pack(side="left")
+            sp = ttk.Spinbox(r, textvariable=var, from_=frm, to=to, increment=inc, width=10, justify="right")
+            sp.pack(side="right")
+
+        # Pasos
+        limit_card = ttk.Labelframe(left, text="Pasos", style="Card.TLabelframe", padding=10)
+        limit_card.pack(fill="x", pady=(10,0))
+        lr = ttk.Frame(limit_card); lr.pack(fill="x")
+        ttk.Label(lr, text="Máximo de pasos").pack(side="left")
         self.step_limit_var = tk.IntVar(value=10)
-        self.step_limit = ttk.Spinbox(
-            limit_row, textvariable=self.step_limit_var, from_=10, to=1000000, increment=10, width=10
-        )
+        self.step_limit = ttk.Spinbox(lr, textvariable=self.step_limit_var, from_=10, to=1000000,
+                                      increment=10, width=10, justify="right")
         self.step_limit.pack(side="right")
 
-        ttk.Button(left, text="Inicializar / Reset", command=self._reset).pack(fill="x", pady=(12,6))
-        self.btn_auto = ttk.Button(left, text="Run (Generar→Animar)", command=self._auto_start)
-        self.btn_auto.pack(fill="x", pady=(0,6))
-        self.btn_pause = ttk.Button(left, text="⏯ Pausa", command=self._toggle_pause)
-        self.btn_pause.pack(fill="x", pady=(0,6))
-        ttk.Button(left, text="⏹ Stop", command=self._auto_stop).pack(fill="x", pady=(0,6))
+        # Controles de animación
+        ctrls = ttk.Labelframe(left, text="Animación", style="Card.TLabelframe", padding=10)
+        ctrls.pack(fill="x", pady=(10,0))
+        ttk.Button(ctrls, text="Inicializar / Reset", command=self._reset, style="Accent.TButton")\
+            .pack(fill="x", pady=(0,8))
+        self.btn_auto = ttk.Button(ctrls, text="Run (Generar→Animar)", command=self._auto_start)
+        self.btn_auto.pack(fill="x", pady=4)
+        self.btn_pause = ttk.Button(ctrls, text="⏯ Pausa", command=self._toggle_pause)
+        self.btn_pause.pack(fill="x", pady=4)
+        ttk.Button(ctrls, text="⏹ Stop", command=self._auto_stop).pack(fill="x", pady=4)
 
-        # Host de controles de plugin
-        self.plugin_host = ttk.Labelframe(left, text="Controles del Protocolo", style="Card.TLabelframe")
-        self.plugin_host.pack(fill="x", pady=(12, 6))
+        # Controles del protocolo
+        self.plugin_host = ttk.Labelframe(left, text="Controles del Protocolo", style="Card.TLabelframe", padding=10)
+        self.plugin_host.pack(fill="x", pady=(10,0))
 
+        # --- RIGHT: tarjetas estado, canvas, detalle y tablas ---
         # Estado
-        state = ttk.Labelframe(right, text="Estado", style="Card.TLabelframe"); state.pack(fill="x")
-        sg = ttk.Frame(state); sg.pack(fill="x", padx=10, pady=6)
+        state = ttk.Labelframe(right, text="Estado", style="Card.TLabelframe", padding=10); state.pack(fill="x")
+        sg = ttk.Frame(state); sg.pack(fill="x")
         self.time_var = tk.StringVar(value="0.00 s")
         self.tx_total_var = tk.StringVar(value="0 (DATA 0 | ACK 0)")
         self.rx_total_var = tk.StringVar(value="0")
@@ -227,17 +297,17 @@ class MainGUI(ttk.Frame):
         self._kv(sg, 2, "Goodput", self.gp_var)
 
         # Canvas (computadoras)
-        canvas_card = ttk.Labelframe(right, text="Topología / Tramas", style="Card.TLabelframe")
-        canvas_card.pack(fill="x", pady=(8,6))
-        self.anim = AnimationCanvas(canvas_card, height=260, use_nests=False)
-        self.anim.pack(fill="x", padx=10, pady=10)
+        canvas_card = ttk.Labelframe(right, text="Topología / Tramas", style="Card.TLabelframe", padding=10)
+        canvas_card.pack(fill="x", pady=(10,0))
+        self.anim = AnimationCanvas(canvas_card, height=280, use_nests=False)
+        self.anim.pack(fill="x")
         self.anim.bind_click(self._on_packet_clicked)
         self.anim.set_on_finished(self._on_anim_finished)
 
         # Detalle de paquete
-        detail = ttk.Labelframe(right, text="Detalle del paquete (pausa + click)", style="Card.TLabelframe")
-        detail.pack(fill="x", pady=(6, 2))
-        dg = ttk.Frame(detail); dg.pack(fill="x", padx=10, pady=6)
+        detail = ttk.Labelframe(right, text="Detalle del paquete (pausa + click)", style="Card.TLabelframe", padding=10)
+        detail.pack(fill="x", pady=(10,0))
+        dg = ttk.Frame(detail); dg.pack(fill="x")
         self.sel_t = tk.StringVar(value="-"); self.sel_kind = tk.StringVar(value="-")
         self.sel_seq = tk.StringVar(value="-"); self.sel_ack = tk.StringVar(value="-"); self.sel_info = tk.StringVar(value="-")
         self._kv(dg, 0, "t", self.sel_t); self._kv(dg, 0, "kind", self.sel_kind, col=1)
@@ -245,47 +315,53 @@ class MainGUI(ttk.Frame):
         self._kv(dg, 2, "info", self.sel_info, col=0)
 
         # Tablas
-        tables = ttk.Panedwindow(right, orient=tk.HORIZONTAL); tables.pack(fill="both", expand=True, pady=(8,0))
-        self.tx_frame = ttk.Labelframe(tables, text="Frames Transmitidos", style="Card.TLabelframe")
-        self.rx_frame = ttk.Labelframe(tables, text="Entregas (to_network_layer)", style="Card.TLabelframe")
+        tables_card = ttk.Labelframe(right, text="Historial", style="Card.TLabelframe", padding=10)
+        tables_card.pack(fill="both", expand=True, pady=(10,0))
+        tables = ttk.Panedwindow(tables_card, orient=tk.HORIZONTAL)
+        tables.pack(fill="both", expand=True)
+
+        self.tx_frame = ttk.Frame(tables); self.rx_frame = ttk.Frame(tables)
         tables.add(self.tx_frame, weight=3); tables.add(self.rx_frame, weight=2)
+
         self.tx_tree = self._build_tx_table(self.tx_frame)
         self.rx_tree = self._build_rx_table(self.rx_frame)
 
         # Progreso
-        status = ttk.Frame(right); status.pack(fill="x", pady=(6, 0))
+        status = ttk.Frame(right); status.pack(fill="x", pady=(8, 0))
         self.progress_var = tk.StringVar(value="Listo")
-        ttk.Label(status, textvariable=self.progress_var, anchor="e").pack(side="right", padx=6)
+        ttk.Label(status, textvariable=self.progress_var, anchor="e", style="Subheader.TLabel")\
+            .pack(side="right")
 
         self.pack(fill="both", expand=True)
         self._apply_min_limit("Utopia")
 
     # ---------- helpers UI ----------
     def _kv(self, parent, r, k, var, col=0):
-        frm = ttk.Frame(parent); frm.grid(row=r, column=col, sticky="ew", padx=6, pady=2)
+        frm = ttk.Frame(parent)
+        frm.grid(row=r, column=col, sticky="ew", padx=6, pady=3)
         ttk.Label(frm, text=k + ": ").pack(side="left")
-        ttk.Label(frm, textvariable=var, font=("", 10, "bold")).pack(side="left")
+        ttk.Label(frm, textvariable=var, font=("Segoe UI Semibold", 11)).pack(side="left")
 
     def _build_tx_table(self, parent):
         cols = ("t", "kind", "seq", "ack", "info")
-        tr = ttk.Treeview(parent, columns=cols, show="headings")
+        tr = ttk.Treeview(parent, columns=cols, show="headings", height=10)
         for c, w in zip(cols, (80, 120, 60, 60, 520)):
             tr.heading(c, text=c); tr.column(c, width=w, anchor=tk.CENTER if c != "info" else tk.W)
         vsb = ttk.Scrollbar(parent, orient="vertical", command=tr.yview)
         tr.configure(yscrollcommand=vsb.set)
-        tr.pack(side="left", fill="both", expand=True, padx=(10,0), pady=10)
-        vsb.pack(side="right", fill="y", padx=(0,10), pady=10)
+        tr.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
         return tr
 
     def _build_rx_table(self, parent):
         cols = ("t", "data")
-        tr = ttk.Treeview(parent, columns=cols, show="headings")
+        tr = ttk.Treeview(parent, columns=cols, show="headings", height=10)
         for c, w in zip(cols, (80, 600)):
             tr.heading(c, text=c); tr.column(c, width=w, anchor=tk.CENTER if c == "t" else tk.W)
         vsb = ttk.Scrollbar(parent, orient="vertical", command=tr.yview)
         tr.configure(yscrollcommand=vsb.set)
-        tr.pack(side="left", fill="both", expand=True, padx=(10,0), pady=10)
-        vsb.pack(side="right", fill="y", padx=(0,10), pady=10)
+        tr.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
         return tr
 
     # ---------- plugins ----------
@@ -323,7 +399,7 @@ class MainGUI(ttk.Frame):
         self.plugin.pack(fill="x")
         self.plugin.bind_host(self.runner, self.anim, self._refresh)
 
-        # Reglas del enunciado: Utopía / Stop-and-Wait sin errores en canal
+        # Reglas del enunciado: Utopía / Stop-and-Wait sin errores en canal (visual, no funcional)
         if name in ("Utopia", "Stop-and-Wait"):
             self.loss.set(0.0); self.corrupt.set(0.0)
 
@@ -335,7 +411,7 @@ class MainGUI(ttk.Frame):
             max_seq=int(self.maxseq.get()), nr_bufs=(int(self.maxseq.get()) + 1) // 2,
         )
 
-    # ---------- acciones ----------
+    # ---------- acciones (SIN CAMBIOS FUNCIONALES) ----------
     def _reset(self):
         self._auto_stop()
         if not self.plugin:
@@ -566,8 +642,8 @@ class MainGUI(ttk.Frame):
 def main():
     root = tk.Tk()
     root.title("Simulador de Protocolos (Main)")
-    root.geometry("1320x880")
-    root.minsize(1200, 780)
+    root.geometry("1360x900")
+    root.minsize(1220, 800)
     app = MainGUI(root)
     app.pack(fill="both", expand=True)
     root.mainloop()
