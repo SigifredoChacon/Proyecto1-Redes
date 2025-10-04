@@ -35,6 +35,9 @@ class StopAndWaitUI(ProtocolPlugin):
         cfg.nr_bufs = 1
         cfg.loss_prob = 0.0
         cfg.corrupt_prob = 0.0
+        cfg.jitter = 0.1
+        cfg.data_timeout = 0.25
+        cfg.ack_timeout = 0.08
 
         self.runner.build_and_bind(self.name, cfg, window_size=1)
         self.anim.clear_packets()

@@ -28,6 +28,9 @@ class PARUI(ProtocolPlugin):
         # PAR: espacio/ventana de 1 bit
         cfg.max_seq = 1
         cfg.nr_bufs = 1
+        cfg.jitter = 0.1
+        cfg.data_timeout = 0.25
+        cfg.ack_timeout = 0.08
         self.runner.build_and_bind(self.name, cfg, window_size=1)
         # Instancias del emisor y receptor como en run_par.py
         self.S = ParSender()

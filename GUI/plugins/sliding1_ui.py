@@ -20,6 +20,9 @@ class SlidingOneBitUI(ProtocolPlugin):
         # Forzar 1-bit (N=1) + parámetros extra
         cfg.max_seq = 1
         cfg.nr_bufs = 1
+        cfg.jitter = 0.1
+        cfg.data_timeout = 0.25
+        cfg.ack_timeout = 0.08
         try:
             cfg.ready_on_enable = True
             cfg.ready_delay = 0.04

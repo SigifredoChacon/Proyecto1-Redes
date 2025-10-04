@@ -92,7 +92,7 @@ class Runner:
 
 # ---------------- Main GUI ----------------
 class MainGUI(ttk.Frame):
-    ANIM_DURATION_MS = 1400
+    ANIM_DURATION_MS = 2200
     ANIM_GAP_MS = 180
 
     def __init__(self, master):
@@ -233,20 +233,15 @@ class MainGUI(ttk.Frame):
 
         # Grid de parámetros
         self.delay = tk.DoubleVar(value=0.02)
-        self.jitter = tk.DoubleVar(value=0.01)
         self.loss = tk.DoubleVar(value=0.0)
         self.corrupt = tk.DoubleVar(value=0.0)
-        self.data_to = tk.DoubleVar(value=0.25)
-        self.ack_to  = tk.DoubleVar(value=0.08)
+
         self.maxseq  = tk.IntVar(value=7)
 
         params = [
             ("Delay (s)", self.delay, 0.0, 5.0, 0.01),
-            ("Jitter (s)", self.jitter, 0.0, 5.0, 0.01),
             ("Pérdida (0-1)", self.loss, 0.0, 1.0, 0.01),
             ("Corrupción (0-1)", self.corrupt, 0.0, 1.0, 0.01),
-            ("DATA timeout (s)", self.data_to, 0.01, 5.0, 0.01),
-            ("ACK timeout (s)", self.ack_to, 0.01, 5.0, 0.01),
             ("max_seq (2^n - 1)", self.maxseq, 1, 31, 2),
         ]
 
@@ -273,11 +268,11 @@ class MainGUI(ttk.Frame):
         ctrls.pack(fill="x", pady=(10,0))
         ttk.Button(ctrls, text="Inicializar / Reset", command=self._reset, style="Accent.TButton")\
             .pack(fill="x", pady=(0,8))
-        self.btn_auto = ttk.Button(ctrls, text="Run (Generar→Animar)", command=self._auto_start)
+        self.btn_auto = ttk.Button(ctrls, text="Ejecutar", command=self._auto_start)
         self.btn_auto.pack(fill="x", pady=4)
-        self.btn_pause = ttk.Button(ctrls, text="⏯ Pausa", command=self._toggle_pause)
+        self.btn_pause = ttk.Button(ctrls, text="Pausa", command=self._toggle_pause)
         self.btn_pause.pack(fill="x", pady=4)
-        ttk.Button(ctrls, text="⏹ Stop", command=self._auto_stop).pack(fill="x", pady=4)
+        ttk.Button(ctrls, text="Detener", command=self._auto_stop).pack(fill="x", pady=4)
 
         # Controles del protocolo
         self.plugin_host = ttk.Labelframe(left, text="Controles del Protocolo", style="Card.TLabelframe", padding=10)
@@ -293,8 +288,8 @@ class MainGUI(ttk.Frame):
         self.eff_var = tk.StringVar(value="0.00")
         self.gp_var = tk.StringVar(value="0.00 pkts/s")
         self._kv(sg, 0, "t (sim)", self.time_var); self._kv(sg, 0, "TX totales", self.tx_total_var, col=1)
-        self._kv(sg, 1, "RX entregados", self.rx_total_var); self._kv(sg, 1, "Eficiencia", self.eff_var, col=1)
-        self._kv(sg, 2, "Goodput", self.gp_var)
+        self._kv(sg, 1, "RX entregados", self.rx_total_var);
+
 
         # Canvas (computadoras)
         canvas_card = ttk.Labelframe(right, text="Topología / Tramas", style="Card.TLabelframe", padding=10)
@@ -405,9 +400,8 @@ class MainGUI(ttk.Frame):
 
     def _cfg(self) -> SimConfig:
         return SimConfig(
-            delay=float(self.delay.get()), jitter=float(self.jitter.get()),
+            delay=float(self.delay.get()),
             loss_prob=float(self.loss.get()), corrupt_prob=float(self.corrupt.get()),
-            data_timeout=float(self.data_to.get()), ack_timeout=float(self.ack_to.get()),
             max_seq=int(self.maxseq.get()), nr_bufs=(int(self.maxseq.get()) + 1) // 2,
         )
 
@@ -440,7 +434,7 @@ class MainGUI(ttk.Frame):
         self._pending_anim.clear()
         self._animating = False
         self._paused = False
-        self.btn_pause.configure(text="⏯ Pausa")
+        self.btn_pause.configure(text="Pausa")
 
         self.plugin.reset(cfg)
         self.anim.set_running(False)
@@ -458,8 +452,7 @@ class MainGUI(ttk.Frame):
 
         self._is_running = True
         self._paused = False
-        self.btn_pause.configure(text="⏯ Pausa")
-        self.btn_auto.configure(text="Generando…")
+        self.btn_pause.configure(text="Pausa")
         self.anim.set_running(False)
         self._start_generation_phase()
 
@@ -467,8 +460,8 @@ class MainGUI(ttk.Frame):
         self._is_running = False
         self._paused = False
         self.anim.set_running(False)
-        self.btn_auto.configure(text="Run (Generar→Animar)")
-        self.btn_pause.configure(text="⏯ Pausa")
+        self.btn_auto.configure(text="Ejecutar")
+        self.btn_pause.configure(text="Pausa")
         if self._job:
             try:
                 self.after_cancel(self._job)
@@ -517,7 +510,6 @@ class MainGUI(ttk.Frame):
         if self._steps_done >= self._target_steps:
             self._refresh()
             self._prepare_anim_batch_from_delta()
-            self.btn_auto.configure(text="Animando…")
             self.anim.set_running(True)
             self._start_anim_batch()
             return

@@ -23,6 +23,9 @@ class SelectiveRepeatUI(ProtocolPlugin):
         try:
             cfg.ready_on_enable = True
             cfg.ready_delay = 0.04
+            cfg.jitter = 0.1
+            cfg.data_timeout = 0.25
+            cfg.ack_timeout = 0.08
         except Exception:
             # Si SimConfig no tiene esos campos, se agregan dinámicamente
             setattr(cfg, "ready_on_enable", True)
