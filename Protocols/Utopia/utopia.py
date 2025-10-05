@@ -3,7 +3,13 @@ from Events.api import (
     wait_for_event, from_network_layer, to_physical_layer,
     from_physical_layer, to_network_layer
 )
-
+"""
+    Funcion que envia paquetes sin ACKs ni temporizadores
+    Args:
+        steps (int): Numero maximo de eventos a procesar, cada NETWORK_LAYER_READY cuenta un envio
+    Returns:
+        None: Toma un paquete de la capa de red y lo manda como DATA (seq=0, ack=0) sin control de errores
+"""
 def sender_utopia(steps=10):
     processed = 0
     while processed < steps:
@@ -14,6 +20,15 @@ def sender_utopia(steps=10):
             to_physical_layer(f)
 
             processed += 1
+
+
+"""
+    Funcion que recibe y entrega datos sin validaciones
+    Args:
+        steps (int): Numero maximo de eventos a procesar, cada FRAME_ARRIVAL intenta entregar a la red
+    Returns:
+        None: Si llega un DATA valido, entrega r.info a la capa de red sin checks adicionales
+"""
 
 def receive_utopia(steps=10):
     processed = 0
