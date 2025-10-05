@@ -1,59 +1,79 @@
-# GUI/plugins/par_ui.py
 from __future__ import annotations
 from tkinter import ttk, messagebox
 from Simulator.config import SimConfig
 from GUI.protocol_base import ProtocolPlugin
 from Utils.types import EventType, FrameKind
-
-# Dependencias del protocolo PAR (rutas contempladas)
-try:
-    from Events.api import wait_for_event, from_physical_layer
-    from Events.api import enable_network_layer, disable_network_layer
-except Exception:
-    from Events.api import wait_for_event, from_physical_layer
-    from Events.api import enable_network_layer, disable_network_layer
-
+from Events.api import wait_for_event, from_physical_layer
+from Events.api import enable_network_layer, disable_network_layer
 from Protocols.PAR.par import ParSender, ParReceiver
-
 
 
 class PARUI(ProtocolPlugin):
     name = "PAR"
 
+    """
+    Construye los controles del panel de PAR en la GUI.
+
+    Args:
+        (none)
+
+    Returns:
+        None
+    """
     def _build_controls(self):
-        row = ttk.Frame(self); row.pack(fill="x", padx=6, pady=6)
+        row = ttk.Frame(self)
+        row.pack(fill="x", padx=6, pady=6)
         ttk.Label(row, text="(Unidireccional A→B, ventana=1)").pack(side="left")
 
-    def reset(self, cfg: SimConfig):
-        # PAR: espacio/ventana de 1 bit
+    """
+    Reinicia lasimulación para PAR y crea emisor/receptor.
+
+    Args:
+        cfg (SimConfig): Configuración base del simulador.
+
+    Returns:
+        None
+    """
+    def reset(self, cfg):
         cfg.max_seq = 1
         cfg.nr_bufs = 1
         cfg.jitter = 0.1
         cfg.data_timeout = 0.25
         cfg.ack_timeout = 0.08
         self.runner.build_and_bind(self.name, cfg, window_size=1)
-        # Instancias del emisor y receptor como en run_par.py
         self.S = ParSender()
         self.R = ParReceiver()
         self.anim.clear_packets()
 
-    # Compatibilidad con base (algunos proyectos piden tick)
+    """
+    Avanza la simulación en k pasos, acumulando los eventos procesados.
+
+    Args:
+        k (int): Cantidad de pasos a ejecutar.
+
+    Returns:
+        int: Total de eventos ejecutados.
+    """
     def tick(self, k: int) -> int:
         total = 0
         for _ in range(max(1, int(k))):
             total += self.auto_step()
         return total
 
+    """
+    Ejecuta una ráfaga de eventos.
+    Entrega DATA al receptor y ACK al emisor, maneja NETWORK_LAYER_READY/TIMEOUT en el emisor.
+
+    Args:
+        (none)
+
+    Returns:
+        int: Número de eventos procesados.
+    """
     def auto_step(self) -> int:
-        """
-        Procesa varios eventos del Engine (similar a run_par.py).
-        Retorna cuántos sub-pasos avanzó, tolerando cola vacía.
-        """
-        N = 200  # tamaño de bloque razonable
+        N = 200
         processed = 0
 
-        # Si el emisor no está esperando, la network layer estará habilitada;
-        # en caso contrario, es normal que la cola quede vacía por momentos.
         try:
             while processed < N:
                 try:
@@ -81,6 +101,17 @@ class PARUI(ProtocolPlugin):
             messagebox.showerror(self.name, str(e))
             return processed
 
-    def direction_for(self, kind: str, seq, ack, info=None) -> str:
-        # En PAR, DATA va LR (A→B) y ACK puro regresa RL (B→A)
-        return "LR" if str(kind).upper() == "DATA" else "RL"
+    """
+    Decide la dirección de animación para el canvas.
+
+    Args:
+        kind (str): Tipo de trama ("DATA" o "ACK").
+        seq (Any): Número de secuencia (no usado aquí).
+        ack (Any): Número de ack (no usado aquí).
+        info (Any): Información opcional del frame (no usado aquí).
+
+    Returns:
+        str: "LR" para DATA (A→B) o "RL" para ACK (B→A).
+    """
+    def direction_for(self, kind, seq, ack, info=None):
+        return "LR" if str(kind) == "DATA" else "RL"

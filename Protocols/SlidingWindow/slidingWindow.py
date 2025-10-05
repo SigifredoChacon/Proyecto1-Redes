@@ -1,168 +1,208 @@
-# Protocols/SlidingWindow/slidingWindow.py
-# Stop-and-Wait (ventana=1) full-duplex sin piggyback oportunista,
-# con piggyback normal en NETWORK_LAYER_READY y ACK puro diferido.
-# Compatible con Engine one-shot (ready_on_enable=True).
-
 from Utils.types import Frame, FrameKind, EventType, Packet
-from Utils.util import inc
 from Events.api import (
     wait_for_event, from_network_layer, to_physical_layer, from_physical_layer,
     to_network_layer, start_timer, stop_timer, start_ack_timer, stop_ack_timer,
     enable_network_layer, disable_network_layer
 )
-import random  # lotería 50/50
+import random
 
-# Offsets de timers para separar A y B en el Engine global
+from Utils.util import inc
+
 OFFSET_A = 0
 OFFSET_B = 100
 
-
 class SW1Peer:
     """
-    Stop-and-Wait full-duplex (W=1) con:
-      - timer único de DATA (para la trama en vuelo),
-      - piggyback normal (solo al enviar DATA en READY),
-      - ACK diferido (ACK puro si no se alcanza a piggybackear),
-      - de-dupe por epoch para evitar doble envío en el mismo tick.
+    Inicializa A o B del protocolo SW.
+
+    Args:
+        label (str): Identificador del lado ("A" o "B").
+    Returns:
+        None
     """
-    def __init__(self, label: str):
+    def __init__(self, label):
         assert label in ("A", "B")
-        self.label = label
+        self.label = label # A o B
+        self.seq = 0
+        self.ack_expected = 0
+        self.waiting = False
+        self.out_buf = {} # Buffer con la data enviada
+        self.frame_expected = 0
+        self.ack_pending_seq = None
+        self._last_sent_epoch = {}
 
-        # ---- Estado TX ----
-        self.seq = 0                 # siguiente seq a usar en TX
-        self.ack_expected = 0        # ACK que libera la DATA en vuelo
-        self.waiting = False         # hay DATA en vuelo
-        self.out_buf = {}            # seq -> Packet (en SW hay a lo sumo 1)
-
-        # ---- Estado RX ----
-        self.frame_expected = 0      # próxima DATA válida a aceptar
-
-        # ---- ACK selectivo pendiente (para piggyback o ACK puro) ----
-        # En SW, el ACK acumulativo "último correcto" = frame_expected ^ 1
-        # Guardamos un "pendiente" para piggyback/ACK puro.
-        self.ack_pending_seq = None  # último DATA correcto recibido (o None)
-
-        # ---- De-dupe por epoch ----
-        self._last_sent_epoch = {}   # seq -> epoch del último envío
-
-    # --- utilidades ---
-    def tx_offset(self) -> int:
+    """
+    Calcula el offset de temporizador segun en lado.
+    Args:
+        ninguno
+    Returns:
+        int: OFFSET_A si es "A" u OFFSET_B si es "B".
+    """
+    def tx_offset(self):
         return OFFSET_A if self.label == "A" else OFFSET_B
 
-    def last_in_order(self) -> int:
-        # En SW acumulamos: último correcto = frame_expected ^ 1
-        return self.frame_expected ^ 1
+    """
+    Funcion que calcula el ultimo numero recibido en orden contiguo (ACK acumulativo)
+    Args:
+        ninguno
+    Returns:
+        int: El numero de secuencia inmediatamente anterior a frame_expected, en modulo
+    """
+    def last_in_order(self):
+        return inc(self.frame_expected, 1)
 
-    def _should_skip_send_this_epoch(self, seq: int, epoch: int) -> bool:
+    """
+    Funcion que decide si debe omitirse el envio de un seq en este epoch
+    Args:
+        seq (int): Numero de secuencia a evaluar
+        epoch (int): Identificador de la iteracion actual de envio
+    Returns:
+        bool: True si ya se envio este seq en el epoch dado (evitar duplicados en el mismo ciclo), False si puede enviarse
+    """
+    def _should_skip_send_this_epoch(self, seq, epoch):
         return self._last_sent_epoch.get(seq) == epoch
 
-    def _mark_sent_epoch(self, seq: int, epoch: int):
+    """
+    Funcion que marca que un numero de secuencia fue enviado en un epoch especifico
+    Args:
+        seq (int): Numero de secuencia enviado
+        epoch (int): Identificador del epoch en el que se envio
+    Returns:
+        None
+    """
+    def _mark_sent_epoch(self, seq, epoch):
         self._last_sent_epoch[seq] = epoch
 
-    def tx_window_has_space(self) -> bool:
-        # SW: espacio si no hay en vuelo
+    """
+    Funcion que verifica si hay espacio en la ventana de transmision
+    Args:
+        ninguno: Usa self.out_buf (dict/buffer de frames pendientes) y self.nr_bufs (tamano de ventana)
+    Returns:
+        bool: True si no hay DATA pendiente y se puede enviar.
+    """
+    def tx_window_has_space(self):
         return not self.waiting
 
-    # --- TX: nuevo envío ---
-    def tx_push_new(self, epoch: int):
-        """Saca de la network layer, etiqueta y envía DATA con piggyback acumulativo."""
-        s = self.seq
-        if self._should_skip_send_this_epoch(s, epoch):
-            return  # de-dupe intra-tick
+    """
+    Envía un nuevo DATA si hay espacio en la ventana.
+    Etiqueta el paquete con el origen (A>/B>), selecciona el ACK piggyback,
+    transmite y arranca el temporizador de datos.
 
-        p = from_network_layer()
-        p_labeled = Packet(f"{self.label}>{p.data}")
-        self.out_buf[s] = p_labeled
+    Args:
+        epoch (int): Época actual para control de reenvíos en el mismo paso.
+    Returns:
+        None
+    """
+    def tx_push_new(self, epoch):
+        sequence = self.seq
+        if self._should_skip_send_this_epoch(sequence, epoch): #Si ya se envio en esta epoca, se salta
+            return
 
-        # Piggyback acumulativo: si tengo un ACK pendiente, úsalo; si no, last_in_order()
-        ack_pb = self.ack_pending_seq if self.ack_pending_seq is not None else self.last_in_order()
-        to_physical_layer(Frame(FrameKind.DATA, s, ack_pb, p_labeled))
-        self._mark_sent_epoch(s, epoch)
-        start_timer(self.tx_offset() + s)
+        packet = from_network_layer()
+        p_labeled = Packet(f"{self.label}>{packet.data}") #Etiqueta el paquete
+        self.out_buf[sequence] = p_labeled #Almacena en buffer
+
+        if self.ack_pending_seq is not None: # Si hay un ACK pendiente, se manda ese
+            ack_pb = self.ack_pending_seq
+        else:
+            ack_pb = self.last_in_order() #Si no, el ultimo recibido en orden
+
+        to_physical_layer(Frame(FrameKind.DATA, sequence, ack_pb, p_labeled))
+
+        self._mark_sent_epoch(sequence, epoch)
+
+        start_timer(self.tx_offset() + sequence)
 
         self.waiting = True
-        self.ack_expected = s
-        # Limpia el pendiente (ya piggybackeado si lo había)
+        self.ack_expected = sequence
         self.ack_pending_seq = None
 
-    # --- TX: consumir ACK piggyback (o puro) ---
-    def tx_consume_ack(self, a: int):
-        """Libera la DATA en vuelo si el ACK confirma la base (SW: ack_expected)."""
-        if self.waiting and a == self.ack_expected:
-            try:
-                stop_timer(self.tx_offset() + self.ack_expected)
-            except Exception:
-                pass
-            # libera
+    """
+    Procesa un ACK y avanza.
+
+    Args:
+        a (int): Número de secuencia confirmado por el receptor.
+    Returns:
+        None
+    """
+    def tx_consume_ack(self, a):
+        if self.waiting and a == self.ack_expected: # si esta esperando un ACK
+            stop_timer(self.tx_offset() + self.ack_expected)
             self.out_buf.pop(self.ack_expected, None)
             self.waiting = False
-            # siguiente seq
-            self.seq ^= 1
-            self.ack_expected ^= 1
+            self.seq = inc(self.seq, 1)
+            self.ack_expected = inc(self.ack_expected, 1)
 
-    # --- TX: retransmisión por TIMEOUT ---
-    def tx_timeout(self, timed_key: int, epoch: int):
-        """Reenvía la DATA base (SW: la única) si sigue pendiente."""
-        # timed_key llega como OFFSET+seq
+
+    """
+    Maneja la expiración del temporizador de datos y retransmite si corresponde.
+    
+    Args:
+        timed_key (int): Clave del timer vencido.
+        epoch (int): Época actual (evita reenvío duplicado en el mismo paso).
+    Returns:
+        None
+    """
+    def tx_timeout(self, timed_key, epoch):
         s = timed_key - self.tx_offset()
         if not self.waiting or s != self.ack_expected:
             return
         if self._should_skip_send_this_epoch(s, epoch):
-            return  # de-dupe intra-tick
+            return
 
         ack_pb = self.ack_pending_seq if self.ack_pending_seq is not None else self.last_in_order()
         to_physical_layer(Frame(FrameKind.DATA, s, ack_pb, self.out_buf[s]))
         self._mark_sent_epoch(s, epoch)
         start_timer(self.tx_offset() + s)
 
-    # --- RX: aceptar DATA y marcar ACK pendiente ---
-    def rx_handle_data(self, r_seq: int, info: Packet):
-        """Acepta solo la DATA esperada; dup/adelantadas se ignoran. Registra ACK pendiente."""
+    """
+    Procesa un DATA recibido. Si es el esperado, entrega a la red y cambia el frame esperdo.
+
+    Args:
+        r_seq (int): Número de secuencia recibido.
+        info (Packet): Paquete de datos contenido en el frame.
+    Returns:
+        None
+    """
+    def rx_handle_data(self, r_seq, info):
         if r_seq == self.frame_expected:
-            to_network_layer(info)     # ¡mantén 'A>'/'B>' para tus métricas!
-            self.frame_expected ^= 1
-        # El ACK debido al emisor es el "último correcto". Para SW, si es duplicado,
-        # r_seq == frame_expected ^ 1; si es nuevo, ya viramos frame_expected.
+            to_network_layer(info)
+            self.frame_expected = inc(self.frame_expected, 1)
+
         self.ack_pending_seq = self.last_in_order()
 
-
-# =========================================================
-#                  BUCLE BIDIRECCIONAL (SW=1)
-#   - Lotería estricta 50/50 por READY (como SR/GBN).
-#   - SIN piggyback oportunista (NO se envía DATA en FRAME_ARRIVAL).
-#   - ACK puro diferido con 'ack_owner'.
-#   - Compatible con motores one-shot (ready_on_enable=True)
-#     usando rearm_ready() para agendar READY cuando haya espacio.
-# =========================================================
-
-def run_gbn_bidirectional(steps=2000, max_seq=1):
+def run_sw1(steps=2000, max_seq=1):
     A = SW1Peer("A")
     B = SW1Peer("B")
 
     processed = 0
-    epoch = 0                # contador de ticks/iteraciones
-    ack_owner = None         # None | "A" | "B"
+    epoch = 0
+    ack_owner = None
 
-    # ---- helpers para motores one-shot READY ----
-    def want_app_ready() -> bool:
-        # Si alguno tiene espacio (no está esperando ACK), podemos empujar app.
+    """
+    Indica si alguna ventana (A o B) tiene espacio.
+
+    Returns:
+        bool: True si A o B pueden aceptar un nuevo paquete de la capa de red.
+    """
+    def want_app_ready():
         return A.tx_window_has_space() or B.tx_window_has_space()
 
+    """
+    Rearma el evento NETWORK_LAYER_READY.
+
+    Returns:
+        None
+    """
     def rearm_ready():
-        # OFF->ON agenda un READY nuevo en motores con ready_on_enable=True
         disable_network_layer()
         enable_network_layer()
 
-    # Asegura el primer READY
     rearm_ready()
-
-    # Métricas opcionales (si quieres ver comportamiento, imprime al final)
-    pb_ready = 0   # piggyback al atender READY natural
-    ack_pure = 0   # ACK puros por ACK_TIMEOUT
+    pb_ready = 0
+    ack_pure = 0
 
     while processed < steps:
-        # Safe wait: si la cola se vaciara (edge case), rearmamos READY y salimos si persiste.
         try:
             ev, payload = wait_for_event()
         except IndexError:
@@ -173,87 +213,77 @@ def run_gbn_bidirectional(steps=2000, max_seq=1):
                 break
 
         if ev == EventType.NETWORK_LAYER_READY:
-            # Lotería estricta: 50/50. Solo el ganador intenta; si no tiene espacio, no se intenta el otro.
             winner_is_A = (random.randint(1, 100) <= 50)
             sent = False
 
-            if winner_is_A:
+            if winner_is_A: #Manda A
                 if A.tx_window_has_space():
-                    A.tx_push_new(epoch); sent = True
-                    if ack_owner == "A":
-                        try: stop_ack_timer()
-                        except Exception: pass
+                    A.tx_push_new(epoch) # A arma DATA y envía
+                    sent = True
+                    if ack_owner == "A": # Si A debía ACK puro, se cancela
+                        stop_ack_timer()
                         ack_owner = None
                     pb_ready += 1
-            else:
+            else: #Manda B
                 if B.tx_window_has_space():
-                    B.tx_push_new(epoch); sent = True
+                    B.tx_push_new(epoch)
+                    sent = True
                     if ack_owner == "B":
-                        try: stop_ack_timer()
-                        except Exception: pass
+                        stop_ack_timer()
                         ack_owner = None
                     pb_ready += 1
 
-            # Rearme de READY:
-            # - Si nadie envió y queda espacio en alguno → rearmar (el otro perdió la lotería).
-            # - Si alguien envió y aún queda espacio en alguno → rearmar para seguir drenando.
-            # - Si ambos sin espacio → esperar ACK/timeout.
-            if want_app_ready():
+            if want_app_ready(): #Si aún hay espacio para otro paquete
                 rearm_ready()
 
         elif ev == EventType.FRAME_ARRIVAL:
-            r = from_physical_layer(payload)
-            if not r:
-                processed += 1; epoch += 1
+            recieve = from_physical_layer(payload)
+            if not recieve:
+                processed += 1
+                epoch += 1
                 continue
 
-            if r.kind == FrameKind.DATA:
-                data = r.info.data
+            if recieve.kind == FrameKind.DATA:
+                data = recieve.info.data
 
-                if data.startswith("A>"):
-                    # RX en B (flujo A->B)
-                    B.rx_handle_data(r.seq, r.info)
-                    # Consumir ACK piggyback (confirma B->A) que venía en ese DATA
-                    B.tx_consume_ack(r.ack)
+                if data.startswith("A>"):  # DATA venía de A hacia B
+                    B.rx_handle_data(recieve.seq, recieve.info) # B entrega si era lo esperado
+                    B.tx_consume_ack(recieve.ack) # B consume ACK piggyback que mandó A
 
-                    # ACK diferido: si no piggybackeamos pronto, saldrá ACK puro
-                    try: stop_ack_timer()
-                    except Exception: pass
-                    start_ack_timer(); ack_owner = "B"
+                    stop_ack_timer()
+                    start_ack_timer()
+                    ack_owner = "B"
 
                 elif data.startswith("B>"):
-                    # RX en A (flujo B->A)
-                    A.rx_handle_data(r.seq, r.info)
-                    A.tx_consume_ack(r.ack)
+                    A.rx_handle_data(recieve.seq, recieve.info)
+                    A.tx_consume_ack(recieve.ack)
 
-                    try: stop_ack_timer()
-                    except Exception: pass
-                    start_ack_timer(); ack_owner = "A"
+                    stop_ack_timer()
+                    start_ack_timer()
+                    ack_owner = "A"
 
-                # SIN piggyback oportunista: NO se envía DATA aquí.
-                # Si ahora hay espacio para que la app empuje, rearmar READY.
                 if want_app_ready():
                     rearm_ready()
 
-            elif r.kind == FrameKind.ACK:
-                tag = r.info.data
+            elif recieve.kind == FrameKind.ACK: # Llega un ACK puro
+                tag = recieve.info.data
                 if tag == "ACK:A":
-                    B.tx_consume_ack(r.ack)
+                    B.tx_consume_ack(recieve.ack)
                 elif tag == "ACK:B":
-                    A.tx_consume_ack(r.ack)
+                    A.tx_consume_ack(recieve.ack)
 
-                # Si se liberó espacio, rearmar READY para que la app empuje.
                 if want_app_ready():
                     rearm_ready()
 
-        elif ev == EventType.ACK_TIMEOUT:
-            # Dispara ACK puro del dueño si no alcanzó a piggybackear
+        elif ev == EventType.ACK_TIMEOUT: # Venció el temporizador de ACK
+
             if ack_owner == "A":
                 ack_seq = A.ack_pending_seq if A.ack_pending_seq is not None else A.last_in_order()
                 to_physical_layer(Frame(FrameKind.ACK, 0, ack_seq, Packet("ACK:A")))
                 A.ack_pending_seq = None
                 ack_owner = None
                 ack_pure += 1
+
             elif ack_owner == "B":
                 ack_seq = B.ack_pending_seq if B.ack_pending_seq is not None else B.last_in_order()
                 to_physical_layer(Frame(FrameKind.ACK, 0, ack_seq, Packet("ACK:B")))
@@ -261,24 +291,19 @@ def run_gbn_bidirectional(steps=2000, max_seq=1):
                 ack_owner = None
                 ack_pure += 1
 
-            # Tras ACK puro, si hay espacio en alguno, rearmar READY
             if want_app_ready():
                 rearm_ready()
 
         elif ev == EventType.TIMEOUT:
-            # Retransmisión de DATA en vuelo (SW: la base)
-            key = payload  # OFFSET+seq
+
+            key = payload
             if key >= OFFSET_B:
                 B.tx_timeout(key, epoch)
             else:
                 A.tx_timeout(key, epoch)
 
-            # SW sigue esperando, pero el otro lado podría tener espacio
             if want_app_ready():
                 rearm_ready()
 
         processed += 1
         epoch += 1
-
-    # (Opcional) métricas
-    # print(f"Piggyback READY: {pb_ready} | ACK puros: {ack_pure}")
